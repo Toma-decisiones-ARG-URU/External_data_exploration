@@ -1,0 +1,11 @@
+row,column,cor,p,n
+parental_predictability,parental_monitoring,0.467,0,84
+parental_environment,parental_monitoring,0.114,0.303,84
+parental_environment,parental_predictability,0.305,0.005,84
+physical_environment,parental_monitoring,0.336,0.002,84
+physical_environment,parental_predictability,0.412,0,84
+physical_environment,parental_environment,0.34,0.002,84
+safety_and_security,parental_monitoring,0.097,0.382,84
+safety_and_security,parental_predictability,0.364,0.001,84
+safety_and_security,parental_environment,0.475,0,84
+safety_and_security,physical_environment,0.268,0.014,84

@@ -1,0 +1,6 @@
+hr_long_study1 <- read.csv("../../Data/hr_long_study1.csv") 
+hr_long_study2 <- read.csv("../../Data/hr_long_study2.csv")
+hr_wide_study1 <- read.csv("../../Data/hr_wide_study1.csv")
+hr_wide_study2 <- read.csv("../../Data/hr_wide_study2.csv")
+tr_long <- read.csv("../../Data/tr_long.csv")
+df_correlation <- read.csv("../../Data/df_correlation.csv")

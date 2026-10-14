@@ -1,0 +1,7 @@
+row,column,cor,p,n
+family_income,unpredictability,0.003,0.978,84
+digit_span,unpredictability,-0.018,0.871,84
+digit_span,family_income,0.107,0.333,84
+perceived_stress,unpredictability,0.468,0,78
+perceived_stress,family_income,0.241,0.034,78
+perceived_stress,digit_span,0.011,0.924,78

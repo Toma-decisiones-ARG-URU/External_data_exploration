@@ -1,0 +1,11 @@
+row,column,cor,p,n
+family_income,unpredictability,-0.532,0,78
+digit_span,unpredictability,-0.208,0.067,78
+digit_span,family_income,0.328,0.003,78
+child_anxiety,unpredictability,0.211,0.064,78
+child_anxiety,family_income,-0.064,0.579,78
+child_anxiety,digit_span,-0.095,0.407,78
+life_events,unpredictability,0.456,0,77
+life_events,family_income,-0.329,0.004,77
+life_events,digit_span,-0.253,0.026,77
+life_events,child_anxiety,0.139,0.228,77

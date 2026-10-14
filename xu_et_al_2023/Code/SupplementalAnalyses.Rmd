@@ -1,0 +1,217 @@
+---
+title: "Supplemental Analyses"
+author: "Yuyan Xu"
+date: "2023-08-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+```
+
+```{r include = FALSE}
+source("Source/Setup.R")
+source("Source/Functions.R")
+```
+
+```{r include = FALSE}
+Data_dir <- "../Data/"
+Code_dir <- "../Code"
+Plot_dir <- "../Plots/"
+
+# note: unstandardized questionnaire data for descriptive stats and plotting ('us' stands for 'unstandardized')
+questionnaire_us_study1 <- read.csv(file.path(Data_dir, "questionnaire_us_study1.csv"))
+questionnaire_us_study2 <- read.csv(file.path(Data_dir, "questionnaire_us_study2.csv"))
+
+# note: hr stands for 'horizon', referring to the Horizon task
+hr_long_study1 <- read.csv(file.path(Data_dir, "hr_long_study1.csv")) # behavioral data in long format
+hr_wide_study1 <- read.csv(file.path(Data_dir, "hr_wide_study1.csv")) # behavioral data in wide format
+hr_mb_study1 <- read.csv(file.path(Data_dir, "hr_mb_study1.csv")) # computational modeling data in wide format
+
+hr_long_study2 <- read.csv(file.path(Data_dir, "hr_long_study2.csv")) # behavioral data in long format
+hr_wide_study2 <- read.csv(file.path(Data_dir, "hr_wide_study2.csv")) # behavioral data in wide format
+hr_mb_study2 <- read.csv(file.path(Data_dir, "hr_mb_study2.csv")) # computational modeling data in wide format
+
+# note: tr stands for 'tree', referring to the Orchard task
+tr_long <- read.csv(file.path(Data_dir, "tr_long.csv")) 
+tr_wide <- read.csv(file.path(Data_dir, "tr_wide.csv"))
+```
+
+# Pearson correlations
+### scales correlations (**SI table 1 & 2**)
+Refer to the output file "scales_study1_cor_matrix.csv" and "scales_study2_cor_matrix.csv" for the results
+```{r eval=FALSE}
+scales_study1 <- c('unpredictability', 'digit_span', 'family_income', 'life_events', 'child_anxiety')
+scales_study2 <- c('unpredictability', 'digit_span', 'family_income', 'perceived_stress')
+
+get_correlation_fun("study1", scales_study1)
+get_correlation_fun("study2", scales_study2)
+```
+
+### QUIC subscales (**SI table 3 & 4**)
+Refer to the output file "quic_study1_cor_matrix.csv" and "quic_study2_cor_matrix.csv" for the results
+```{r eval=FALSE}
+quic_study1 <- c("parental_monitoring", "parental_predictability", "parental_environment", "physical_environment", "safety_and_security")
+quic_study2 <- c("parental_monitoring", "parental_predictability", "parental_environment", "physical_environment", "safety_and_security")
+
+get_correlation_fun("study1", quic_study1)
+get_correlation_fun("study2", quic_study2)
+```
+
+# Model-based Analysis
+### Horizon task directed exploration
+```{r}
+df1 <- hr_mb_study1 %>% left_join(., subset(hr_wide_study1, select = c("id", "child_anxiety")))
+df2 <- hr_mb_study2 %>% left_join(., subset(hr_wide_study2, select = c("id", "perceived_stress")))
+
+### Study 1
+summary(lm(mb_directed_exploration ~ unpredictability + digit_span + family_income + child_anxiety, data = df1))
+
+### Study 2
+summary(lm(mb_directed_exploration ~ unpredictability + digit_span + family_income + perceived_stress, data = df2))
+```
+
+# Additional Mediating Mechanisms for Reduced Exploration in the Horizon Task
+### Reaction time
+In the model output below, check **unpredictability** for the effect of childhood unpredictability on reaction time for directed exploration; check **horizon:unpredictability** for the effect of childhood unpredictability on reaction time for strategic exploration; check **conflict:unpredictability** for the effect of childhood unpredictability on reaction time for directed exploration in reward-information conflict games.
+```{r}
+### Study 1
+control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e6),check.nobs.vs.nRE = "ignore") 
+summary(lmer(reaction_time_c5 ~ horizon*conflict*unpredictability + digit_span + family_income + child_anxiety + (1 + horizon + conflict|id), data = hr_long_study1, control = control))
+
+### Study 2
+control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e6),check.nobs.vs.nRE = "ignore") 
+summary(lmer(reaction_time_c5 ~ horizon*conflict*unpredictability + digit_span + family_income + perceived_stress + (1 + horizon + conflict|id), data = hr_long_study2, control = control))
+```
+
+### Reward maximization
+In the model output below, check **reward_differential:unpredictability** for the effect of childhood unpredictability on reward maximization (choose the high mean option at the last choice in H6 games as a function of reward differential). 
+```{r}
+### Study 1
+control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e7))
+mod <- glmer(chose_high_mean_c10_long ~ reward_differential*unpredictability + digit_span + family_income + child_anxiety + (1 + reward_differential|id), data = hr_long_study1, family = binomial, control = control)
+
+summary(mod)
+tab_model(mod)
+
+### Study 2
+control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e7))
+mod <- glmer(chose_high_mean_c10_long ~ reward_differential*unpredictability + digit_span + family_income + perceived_stress + (1 + reward_differential|id), data = hr_long_study2, family = binomial, control = control)
+
+summary(mod)
+tab_model(mod)
+```
+
+# SI Figure 1
+```{r}
+### prep data frames
+df_plot_study1 <- hr_wide_study1 %>% 
+  select(id, choice06:choice10) %>% 
+  pivot_longer(cols = starts_with("choice"), names_to = "choice", values_to = "chose_high_mean") %>% 
+  summarySE(measurevar="chose_high_mean", groupvars=c("choice")) %>% 
+  mutate(study = 'Primary Study')
+
+df_plot_study2 <- hr_wide_study2 %>% 
+  select(id, choice06:choice10) %>% 
+  pivot_longer(cols = starts_with("choice"), names_to = "choice", values_to = "chose_high_mean") %>% 
+  summarySE(measurevar="chose_high_mean", groupvars=c("choice")) %>% 
+  mutate(study = 'Replication Study')
+
+df_plot <- rbind(df_plot_study1, df_plot_study2)
+
+### create line plot
+ggplot(df_plot, aes(x=choice, y=chose_high_mean, colour=study, group=study)) + 
+  geom_errorbar(aes(ymin=chose_high_mean-se, ymax=chose_high_mean+se), colour="black", width=.1) +
+  geom_line() +
+  geom_point(size=3, shape=21, fill="white") + # 21 is filled circle
+  xlab("Post-choices for Long Horizon Games") +
+  ylab("Choosing High Mean Option") +
+  scale_colour_hue(name="Study", breaks=c("LIA", "EXP")) +
+  theme_bw() +
+  ylim(0.5,1.0) + 
+  scale_color_discrete(labels = c("Primary Study", "Replication Study")) +
+  theme(legend.justification = "top")
+ggsave(filename = file.path(Plot_dir,"SI_Figure1.png"), width = 15, height = 10, units = "cm")
+```
+
+# SI Figure 2
+```{r}
+# scale distribution
+hist_quic_study1 <- questionnaire_us_study1 %>% 
+  select(parental_monitoring:safety_and_security, unpredictability) %>% 
+  rename("Parental Monitoring" = parental_monitoring,
+         "Parental Predictability" = parental_predictability,
+         "Parental Environment" = parental_environment,
+         "Physical Environment" = physical_environment,
+         "Safety and Security" = safety_and_security,
+         "Total Score" = unpredictability) %>% 
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) + 
+  facet_wrap(~ variable, scales = "free") +
+  geom_histogram(position="dodge", alpha=0.5) +
+  theme(legend.position="top") +
+  theme_bw()
+hist_quic_study1
+ggsave(filename = file.path(Plot_dir,"quic_histogram_study1.png"), width = 30, height = 20, units = "cm")
+
+hist_quic_study2 <- questionnaire_us_study2 %>% 
+  select(parental_monitoring:safety_and_security, unpredictability) %>% 
+  rename("Parental Monitoring" = parental_monitoring,
+         "Parental Predictability" = parental_predictability,
+         "Parental Environment" = parental_environment,
+         "Physical Environment" = physical_environment,
+         "Safety and Security" = safety_and_security,
+         "Total Score" = unpredictability) %>% 
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>% 
+  ggplot(aes(x = value)) + 
+  facet_wrap(~ variable, scales = "free") +
+  geom_histogram(position="dodge", alpha=0.5) +
+  theme(legend.position="top") +
+  theme_bw()
+hist_quic_study2
+ggsave(filename = file.path(Plot_dir,"quic_histogram_study2.png"), width = 30, height = 20, units = "cm")
+```
+
+# SI Figure 3
+```{r}
+### select those whose total quic score is higher than 10 (~ top 20%)
+quic_top_study1 <- questionnaire_us_study1 %>% 
+  select(id, parental_monitoring:safety_and_security, unpredictability) %>% 
+  rename("Parental Monitoring" = parental_monitoring,
+         "Parental Predictability" = parental_predictability,
+         "Parental Environment" = parental_environment,
+         "Physical Environment" = physical_environment,
+         "Safety and Security" = safety_and_security) %>% 
+  mutate_if(is.numeric, ~(scale(.) %>% as.vector)) %>% 
+  filter(unpredictability >= .80) %>% select(-unpredictability) %>% # this cutoff separates the top 20%
+  pivot_longer(cols = !id, names_to = "subscales", values_to = "values")
+
+quic_top_study2 <- questionnaire_us_study2 %>% 
+  mutate(id = as.character(id)) %>% 
+  select(id, parental_monitoring:safety_and_security, unpredictability) %>% 
+  rename("Parental Monitoring" = parental_monitoring,
+         "Parental Predictability" = parental_predictability,
+         "Parental Environment" = parental_environment,
+         "Physical Environment" = physical_environment,
+         "Safety and Security" = safety_and_security) %>% 
+  mutate_if(is.numeric, ~(scale(.) %>% as.vector)) %>% 
+  filter(unpredictability >= .80) %>% select(-unpredictability) %>% # this cutoff separates the top 20%
+  pivot_longer(cols = !id, names_to = "subscales", values_to = "values")
+
+### make the plot
+ggplot(data = quic_top_study1, aes(x = subscales, y = values, group = id, color = id)) + 
+  geom_point() + 
+  geom_line() +  
+  scale_x_discrete(labels = scales::label_wrap(10)) + # wrap the x axis labels
+  guides(color = guide_legend(title = "Subject ID")) + # change the legend title
+  labs(x ="QUIC Subscales", y = "Standardized Values") # change axis titles
+ggsave(filename = file.path(Plot_dir,"quic_spaghetti_study1.png"), width = 20, height = 15, units = "cm")
+
+ggplot(data = quic_top_study2, aes(x = subscales, y = values, group = id, color = id)) + 
+  geom_point() + 
+  geom_line() +  
+  scale_x_discrete(labels = scales::label_wrap(10)) +
+  guides(color = guide_legend(title = "Subject ID")) + # change the legend title
+  labs(x ="QUIC Subscales", y = "Standardized Values") # change axis titles
+ggsave(filename = file.path(Plot_dir,"quic_spaghetti_study2.png"), width = 20, height = 15, units = "cm")
+```

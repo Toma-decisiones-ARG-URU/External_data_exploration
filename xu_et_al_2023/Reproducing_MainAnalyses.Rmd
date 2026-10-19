@@ -1,0 +1,253 @@
+---
+title: "Working with Xu et al 2023"
+author: "Dr. Federico Giovannetti"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+
+library(tidyverse)
+library(lme4)
+
+```
+
+
+
+This document uses data coming from the following article:
+
+- Y. Xu,M.B. Harms,C.S. Green,R.C. Wilson, & S.D. Pollak,  Childhood unpredictability and the development of exploration, Proc. Natl. Acad. Sci. U.S.A. 120 (49) e2303869120, https://doi.org/10.1073/pnas.2303869120 (2023).
+
+We aim to replicate some of the figures and analysis from the paper in order to get some insights for a new project (e.g. required sample size, amount of trials)
+
+# Data loading
+
+```{r}
+
+# note: unstandardized questionnaire data ('us' stands for 'unstandardized')
+questionnaire_us_study1 <- read.csv("xu_et_al_2023/repo_files/Data/questionnaire_us_study1.csv")
+questionnaire_us_study2 <- read.csv("xu_et_al_2023/repo_files/Data/questionnaire_us_study2.csv")
+
+# note: hr stands for 'horizon', referring to the Horizon task
+hr_long_study1 <- read.csv("xu_et_al_2023/repo_files/Data/hr_long_study1.csv") # behavioral data in long format
+hr_wide_study1 <- read.csv("xu_et_al_2023/repo_files/Data/hr_wide_study1.csv") # behavioral data in wide format
+
+hr_long_study2 <- read.csv("xu_et_al_2023/repo_files/Data/hr_long_study2.csv") # behavioral data in long format
+hr_wide_study2 <- read.csv("xu_et_al_2023/repo_files/Data/hr_wide_study2.csv") # behavioral data in wide format
+
+```
+
+# Descriptive statistics 
+### Horizon task (**main text table 2**)
+```{r}
+# Study 1
+hr_wide_study1 %>% select(directed_exploration,strategic_exploration,rt_5thchoice,reward_maximization,mean_reward) %>% vtable::st(.)
+
+# Study 2
+hr_wide_study2 %>% select(directed_exploration,strategic_exploration,rt_5thchoice,reward_maximization,mean_reward) %>% vtable::st(.)
+
+# t-test
+hr_study1 <- hr_wide_study1 %>% 
+  select(directed_exploration,strategic_exploration,rt_5thchoice,reward_maximization,mean_reward) %>% 
+  mutate(study = "Primary")
+hr_study2 <- hr_wide_study2 %>% 
+  select(directed_exploration,strategic_exploration,rt_5thchoice,reward_maximization,mean_reward) %>% 
+  mutate(study = "Replication")
+hr <- rbind(hr_study1,hr_study2)
+
+a <- rempsyc::nice_t_test(data = hr, response = "directed_exploration", group = "study", alternative = "two.sided", var.equal = TRUE) 
+b <- rempsyc::nice_t_test(data = hr, response = "strategic_exploration", group = "study", alternative = "two.sided", var.equal = TRUE) 
+c <- rempsyc::nice_t_test(data = hr, response = "rt_5thchoice", group = "study", alternative = "two.sided", var.equal = TRUE) 
+d <- rempsyc::nice_t_test(data = hr, response = "reward_maximization", group = "study", alternative = "two.sided", var.equal = TRUE) 
+e <- rempsyc::nice_t_test(data = hr, response = "mean_reward", group = "study", alternative = "two.sided", var.equal = TRUE) 
+
+bind_rows(a, b, c, d, e) %>% 
+  flextable::flextable()
+
+```
+
+
+
+### Questionnaires (**main text table 3**)
+```{r}
+# Study 1
+questionnaire_us_study1 %>% select(unpredictability,family_income,digit_span) %>% vtable::st(.)
+
+# Study 2
+questionnaire_us_study2 %>% select(unpredictability,family_income,digit_span) %>% vtable::st(.)
+
+# t-test
+q_study1 <- questionnaire_us_study1 %>% select(unpredictability,family_income,digit_span) %>% mutate(study = "Primary")
+q_study2 <- questionnaire_us_study2 %>% select(unpredictability,family_income,digit_span) %>% mutate(study = "Replication")
+q <- rbind(q_study1,q_study2)
+
+a <- rempsyc::nice_t_test(data = q, response = "unpredictability", group = "study", alternative = "two.sided", var.equal = TRUE) 
+b <- rempsyc::nice_t_test(data = q, response = "family_income", group = "study", alternative = "two.sided", var.equal = TRUE) 
+c <- rempsyc::nice_t_test(data = q, response = "digit_span", group = "study", alternative = "two.sided", var.equal = TRUE) 
+
+bind_rows(a, b, c)
+```
+
+
+
+# Baseline evidence of exploration under task manipulation
+### Horizon task (**main text table 1**)
+```{r message=FALSE, warning=FALSE}
+rownames <- c("average directed exploration (1-sample t-test)", 
+              "directed exploration in H1 games (1-sample t-test)", 
+              "directed exploration in H6 games (1-sample t-test)",
+              "strategic directed exploration (2-sample t-test between H1 and H6 games)")
+
+# Study 1
+df_baseline_study1 <- hr_long_study1 %>% group_by(id, game_length) %>% summarise(avg_explore = mean(chose_high_info_value))
+
+a <- rempsyc::nice_t_test(data = df_baseline_study1, response = "avg_explore",mu = 0, warning = FALSE)
+b <- rempsyc::nice_t_test(data = subset(df_baseline_study1, game_length == 5), response = "avg_explore",mu = 0, warning = FALSE) 
+c <- rempsyc::nice_t_test(data = subset(df_baseline_study1, game_length == 10), response = "avg_explore",mu = 0, warning = FALSE)
+d <- rempsyc::nice_t_test(data = df_baseline_study1, response = "avg_explore", group = "game_length", alternative = "less", var.equal = TRUE) 
+
+bind_rows(a, b, c, d) %>% cbind(rownames) %>% select(rownames, t, df, p, d, CI_lower, CI_upper)
+
+# Study 2
+df_baseline_study2 <- hr_long_study2 %>% group_by(id, game_length) %>% summarise(avg_explore = mean(chose_high_info_value))
+
+a <- rempsyc::nice_t_test(data = df_baseline_study2, response = "avg_explore",mu = 0, warning = FALSE) 
+b <- rempsyc::nice_t_test(data = subset(df_baseline_study2, game_length == 5), response = "avg_explore",mu = 0, warning = FALSE) 
+c <- rempsyc::nice_t_test(data = subset(df_baseline_study2, game_length == 10), response = "avg_explore",mu = 0, warning = FALSE)
+d <- rempsyc::nice_t_test(data = df_baseline_study2, response = "avg_explore", group = "game_length", alternative = "less", var.equal = TRUE) 
+
+bind_rows(a, b, c, d) %>% cbind(rownames) %>% select(rownames, t, df, p, d, CI_lower, CI_upper)
+```
+
+# Is childhood unpredictability associated with reduced exploration?
+### Horizon task
+##### Directed exploration (**main text results**)
+###### Study 1
+In the model output below, check **unpredictability** for whether there is an effect of childhood unpredictability on directed exploration.
+```{r}
+mod1 <- lm(directed_exploration ~ unpredictability + digit_span + family_income + child_anxiety, data = hr_wide_study1)
+
+summary(mod1)
+
+sjPlot::tab_model(mod1)
+
+(p1 <- sjPlot::plot_model(mod1, type="eff",
+                  terms=c("unpredictability"), 
+                  title = "Directed Exploration in Study 1", 
+                  axis.title = c("Childhood Unpredictability (Standardized)", "% Exploration"),
+                  show.data = TRUE, jitter= NULL, line.size = 1) +
+    scale_x_continuous(limits=c(-1, 3.3), breaks = c(-1, 0, 1, 2, 3)) + ylim(0.1,0.75))
+# ggsave(path = "../Plots/", filename = "directed_exploration_main.png", width = 15, height = 10, units = "cm")
+```
+
+###### Study 2
+```{r}
+mod2 <- lm(directed_exploration ~ unpredictability + digit_span + family_income + perceived_stress, data = hr_wide_study2)
+
+summary(mod2)
+
+sjPlot::tab_model(mod2)
+
+(p2 <- sjPlot::plot_model(mod2, type="eff",
+                  terms=c("unpredictability"), 
+                  title = "Directed Exploration in Study 2", 
+                  axis.title = c("Childhood Unpredictability (Standardized)", "% Exploration"),
+                  show.data = TRUE, jitter= NULL, line.size = 1) + 
+    scale_x_continuous(limits=c(-1, 4), breaks = c(-1, 0, 1, 2, 3, 4)) + ylim(0.1,0.75))
+# ggsave(path = "../Plots/", filename = "directed_exploration_replication.png", width = 15, height = 10, units = "cm")
+```
+
+##### Strategic directed exploration (**main text results**)
+```{r}
+### Re-level factors to compare exploration in short and long horizon games
+# set the reference level to long horizon games
+hr_long_study1$horizon <- relevel(as.factor(hr_long_study1$horizon), ref = 1)
+hr_long_study2$horizon <- relevel(as.factor(hr_long_study2$horizon), ref = 1)
+
+# set the reference level to reward-information conflict games
+hr_long_study1$conflict <- relevel(as.factor(hr_long_study1$conflict), ref = 1)
+hr_long_study2$conflict <- relevel(as.factor(hr_long_study2$conflict), ref = 1)
+```
+
+###### Study 1
+In the model output below, check **horizon:unpredictability** for whether there is an effect of childhood unpredictability on strategic exploration.
+```{r message=FALSE, warning=FALSE}
+control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e7))
+
+mod3 <- glmer(chose_high_info_value ~ horizon*conflict*unpredictability + digit_span + family_income + child_anxiety + (1 + horizon + conflict |id), data = hr_long_study1, family = binomial, control = control)
+
+summary(mod3)
+
+sjPlot::tab_model(mod3)
+
+emmeans::emtrends(mod3, pairwise ~ horizon, var="unpredictability")
+
+# note: HEX color codes from https://projects.susielu.com/viz-palette
+(p3 <- sjPlot::plot_model(mod3, type="eff",
+                  terms=c("unpredictability", "horizon"), 
+                  title = "Strategic directed exploration in Study 1", 
+                  legend.title = "Horizon", 
+                  axis.title = c("Childhood Unpredictability (Standardized)", "Pr(Exploration)"),
+                  show.data = FALSE, jitter= NULL, line.size = 1) + 
+    scale_color_manual(values = c("#D72C2C", "#0000FF"), 
+                       labels = c("Short horizon", "Long horizon"), 
+                       aesthetics = c("color", "fill")) + 
+    # scale_x_continuous(limits=c(-1, 3.3), breaks = c(-1, 0, 1, 2, 3, 4)) + 
+    scale_y_continuous(limits=c(0.15, 0.70), breaks = c(0, 0.2, 0.4, 0.6)))
+#   ylim(0,0.70)) + 
+# ylim(0.15,0.70))
+# ggsave(path = "../Plots/", filename = "strategic_directed_exploration_main.png", width = 15, height = 10, units = "cm")
+```
+
+###### Study 2
+```{r}
+control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e7))
+
+mod4 <- glmer(chose_high_info_value ~ horizon*conflict*unpredictability + digit_span + family_income + perceived_stress + (1 + horizon + conflict |id), data = hr_long_study2, family = binomial, control = control)
+
+summary(mod4)
+
+sjPlot::tab_model(mod4)
+
+emmeans::emtrends(mod4, pairwise ~ horizon, var="unpredictability")
+
+(p4 <- sjPlot::plot_model(mod4, type="eff",
+                  terms=c("unpredictability", "horizon"), 
+                  title = "Strategic directed exploration in Study 2", 
+                  legend.title = "Horizon", 
+                  axis.title = c("Childhood Unpredictability (Standardized)", "Pr(Exploration)"),
+                  show.data = FALSE, jitter= NULL, line.size = 1) +
+    scale_color_manual(values = c("#D72C2C", "#0000FF"), 
+                       labels = c("Short horizon", "Long horizon"), 
+                       aesthetics = c("color", "fill")) + 
+    scale_x_continuous(limits=c(-1, 4), breaks = c(-1, 0, 1, 2, 3, 4)) + 
+    scale_y_continuous(limits=c(0.15, 0.70), breaks = c(0, 0.2, 0.4, 0.6)))
+# ylim(0.15,0.70))
+# ggsave(path = "../Plots/", filename = "strategic_directed_exploration_replication.png", width = 15, height = 10, units = "cm")
+
+```
+
+### Bonus: effect of parent-report of unpredictability (**main text results**)
+Note: parent-report of unpredictability is only assessed in Primary Study (study 1)
+In the model output below, check **life_events** for whether there is an effect of parent-report of  unpredictability on directed exploration.
+```{r}
+### Directed Exploration
+mod5 <- lm(directed_exploration ~ life_events + digit_span + family_income + child_anxiety, data = hr_wide_study1)
+
+summary(mod5)
+
+sjPlot::tab_model(mod5)
+
+### Strategic Exploration
+control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e7))
+
+mod5 <- glmer(chose_high_info_value ~ horizon*conflict*life_events + digit_span + family_income + child_anxiety + (1 + horizon + conflict |id), data = hr_long_study1, family = binomial, control = control)
+
+summary(mod5)
+
+sjPlot::tab_model(mod5)
+```

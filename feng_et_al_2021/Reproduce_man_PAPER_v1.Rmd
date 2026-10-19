@@ -1,0 +1,551 @@
+---
+title: "Working with Feng et al 2021"
+author: "Dr. Federico Giovannetti"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+
+library(tidyverse)
+
+```
+
+
+
+This document uses data coming from the following article:
+
+- Feng, S.F., Wang, S., Zarnescu, S. et al. The dynamics of explore–exploit decisions reveal a signal-to-noise mechanism for random exploration. Sci Rep 11, 3077 (2021). Paper: https://doi.org/10.1038/s41598-021-82530-8
+
+
+We aim to replicate some of the figures and analysis from the paper in order to get some insights for a new project (e.g. required sample size, amount of trials)
+
+
+# 1. Data Loading
+
+This chunk should imitate the function in `load_humanData_v1.m`
+
+
+```{r data_loading}
+
+#### 1. Load horizon and demographic data ####
+# the original code loaded "allHorizonData_v2.csv", but it was not found in the repo.
+# so "allHorizonData_cut.csv" is used instead
+
+complete_data <- read_csv("feng_et_al_2021/repo_files/allHorizonData_cut.csv")
+demographic_data <- read_csv("feng_et_al_2021/repo_files/DDM_demographics.csv")
+
+#### 2. Apply original data processing steps ####
+clean_data <- complete_data %>%
+  
+  # princeton subjects only
+  filter(expt_name %in% c('pilot-v1', 'repeater-v1')) %>%
+  
+  # align some notations for later on
+  mutate(sID = "sNum") %>%
+  
+  #  load demographics
+  left_join(demographic_data, by = c("subjectID" = "fname")) %>%
+  
+  # remove fast or slow RTs
+  # Here, the original script pointed to "a" as the response variable.
+  # but it was absent in the data so I suppose I should use "c". ("C_5", actually)
+  mutate(
+    c5 = ifelse(rt5 > 0.1 & rt5 < 3, c5, NA)
+  ) %>% 
+
+# 3. Count excluded trials per subject
+
+  mutate(nExcluded = sum(is.na(c5)), .by = "subjectID")  
+
+
+
+# 
+# excluded_trials_by_subj <- clean_data %>%
+#   group_by(subjectID) %>%
+#   summarise(nExcluded = sum(is.na(a_5)))  
+# 
+# 
+# 
+# # I add nExcluded to clean_data
+# 
+# clean_data %>% 
+#   left_join(excluded_trials_by_subj)
+
+
+```
+
+
+# 2. Report demographics and exclude subjects
+
+This is a bit different from the original code. The original dataset from the repo does not include the "excluded" variable. Maybe it's in the `allHorizonData_v2.csv` file (which I didn't find).
+
+I applied the exclusion criteria stated in the paper (include only subjects with at least 131 trials per horizon condition).
+
+```{r}
+
+ df %>%
+  # group_by(subjectID, gameLength) %>% 
+  mutate(nIncluded = sum(!is.na(c5)), .by = c("subjectID", "gameLength"))  %>% 
+  mutate(Include = ifelse(nIncluded >= 132, 1, 0)) %>% 
+  mutate(Include_subject = min(Include),.by = "subjectID") %>% 
+  filter(Include_subject == 1) %>% 
+  distinct(subjectID, is_male, age) %>% 
+  summarise(total = n(),
+            male = sum(is_male, na.rm=TRUE),
+            female = sum(!is_male, na.rm=TRUE),
+            min_age = min(age, na.rm=TRUE),
+            max_age = max(age, na.rm=TRUE),
+            mean_age = mean(age, na.rm=TRUE))
+
+
+clean_data <- clean_data %>% 
+  mutate(nIncluded = sum(!is.na(c5)), .by = c("subjectID", "gameLength"))  %>% 
+  mutate(Include = ifelse(nIncluded >= 132, 1, 0))%>% 
+  mutate(Include_subject = min(Include),.by = "subjectID") %>% 
+  filter(Include_subject == 1) 
+
+```
+
+
+```{r}
+
+# load Sam's MCMC parameters
+fname1 <- 'fittedparams.csv'
+fname2 <- 'fittedT0.csv'
+fit_MCMC <- load_MCMCParameters_v1(fname1, fname2)
+
+# align sub sIDs to sim sIDs
+alignment_results <- align_subToSim_v1(sub, fit_MCMC)
+sub <- alignment_results$sub
+sub_all <- alignment_results$sub_all
+
+# add fields to fit_MCMC for easier comparison with data
+fit_MCMC <- addFrom_subToSim_v1(sub, fit_MCMC)
+
+# report demographics
+report_demographics_v1(sub_all)
+
+
+```
+
+
+```{r}
+
+# Funciones auxiliares de verosimilitud
+lik_13 <- function(X, dm, c5, uc, priorFlag) {
+  bias <- X[1]
+  sigma <- X[2]
+  bonus <- X[3]
+  
+  if (is.na(sigma) || is.na(bias) || is.na(bonus)) return(Inf)
+  if (sigma <= 0) return(Inf) # Prevenir división por cero o valores negativos
+  
+  dQ <- dm + uc * bonus + bias
+  P <- 1 / (1 + exp(-1 / (sigma * sqrt(2)) * dQ))
+  
+  # Evitar log(0)
+  P <- pmin(pmax(P, 1e-15), 1 - 1e-15)
+  
+  lP1 <- log(P[c5 == 1 & !is.na(c5)])
+  lP0 <- log(1 - P[c5 == 0 & !is.na(c5)])
+  
+  if (priorFlag) {
+    # Equivalente a gaussianPrior(bonus, 0, 20) y exponentialPrior(sigma, 1/20)
+    L_AB <- dnorm(bonus, mean = 0, sd = 20, log = TRUE)
+    L_noise <- dexp(sigma, rate = 1/20, log = TRUE)
+    LL <- -(sum(lP1) + sum(lP0) + L_AB + L_noise)
+  } else {
+    LL <- -(sum(lP1) + sum(lP0))
+  }
+  return(LL)
+}
+
+lik_22 <- function(X, dm, c5, priorFlag) {
+  bias <- X[1]
+  sigma <- X[2]
+  
+  if (is.na(sigma) || is.na(bias)) return(Inf)
+  if (sigma <= 0) return(Inf)
+  
+  dQ <- dm + bias
+  P <- 1 / (1 + exp(-1 / (sigma * sqrt(2)) * dQ))
+  
+  # Evitar log(0)
+  P <- pmin(pmax(P, 1e-15), 1 - 1e-15)
+  
+  lP1 <- log(P[c5 == 1 & !is.na(c5)])
+  lP0 <- log(1 - P[c5 == 0 & !is.na(c5)])
+  
+  if (priorFlag) {
+    L_noise <- dexp(sigma, rate = 1/20, log = TRUE)
+    LL <- -(sum(lP1) + sum(lP0) + L_noise)
+  } else {
+    LL <- -(sum(lP1) + sum(lP0))
+  }
+  return(LL)
+}
+
+# Función principal de ajuste
+fit_biasNoiseBonus_v2 <- function(sub, priorFlag = FALSE) {
+  
+  L <- unique(sub$gameLength)
+  n_horizons <- length(L)
+  
+  LL <- numeric(n_horizons)
+  k <- numeric(n_horizons)
+  n <- numeric(n_horizons)
+  
+  # Matriz para almacenar parámetros (3 del [1 3] y 2 del [2 2] = 5 filas)
+  x_matrix <- matrix(NA, nrow = 5, ncol = n_horizons)
+  
+  for (i in seq_along(L)) {
+    
+    # --- [1 3] condition ---
+    # Asumiendo que sub$n1_4, sub$a_5, etc., son vectores extraídos previamente de las matrices
+    ind13 <- (sub$gameLength == L[i]) & (sub$n1_4 != sub$n2_4) & (!is.na(sub$a_5))
+    
+    c5 <- sub$a_5[ind13] == 2
+    dm <- sub$o2_4[ind13] - sub$o1_4[ind13]
+    uc <- -(sub$n2_4[ind13] - sub$n1_4[ind13]) / 2
+    
+    # Optimización [1 3]: x = [bias, sigma, bonus]
+    X0_13 <- c(0, 10, 0)
+    LB_13 <- c(-100, 0.001, -100) # sigma no puede ser exactamente 0
+    UB_13 <- c(100, 100, 100)
+    
+    fit13 <- optim(par = X0_13, fn = lik_13, dm = dm, c5 = c5, uc = uc, priorFlag = priorFlag, 
+                   method = "L-BFGS-B", lower = LB_13, upper = UB_13)
+    
+    tar13 <- fit13$value
+    x_13 <- fit13$par
+    LL[i] <- -tar13
+    
+    # --- [2 2] condition ---
+    ind22 <- (sub$gameLength == L[i]) & (sub$n1_4 == sub$n2_4) & (!is.na(sub$a_5))
+    
+    c5_22 <- sub$a_5[ind22] == 2
+    dm_22 <- sub$o2_4[ind22] - sub$o1_4[ind22]
+    # En MATLAB dice sub(1).n2(ind,4), asumo que es para extraer la estructura si es un array
+    uc_22 <- (sub$n2_4[ind22] - sub$n1_4[ind22]) / 2 
+    
+    # Optimización [2 2]: x = [bias, sigma]
+    X0_22 <- c(0, 10)
+    LB_22 <- c(-100, 0.001)
+    UB_22 <- c(100, 100)
+    
+    fit22 <- optim(par = X0_22, fn = lik_22, dm = dm_22, c5 = c5_22, priorFlag = priorFlag, 
+                   method = "L-BFGS-B", lower = LB_22, upper = UB_22)
+    
+    tar22 <- fit22$value
+    x_22 <- fit22$par
+    
+    LL[i] <- LL[i] - tar22
+    k[i] <- length(X0_13) + length(X0_22)
+    n[i] <- sum(sub$gameLength == L[i], na.rm = TRUE)
+    
+    x_matrix[, i] <- c(x_13, x_22)
+  }
+  
+  total_n <- length(sub$n2_4)
+  
+  BIC_val <- -2 * sum(LL) + sum(k) * log(sum(n))
+  LPT_val <- exp(-BIC_val / sum(n) / 2)
+  
+  AIC_val <- -2 * sum(LL) + sum(k) * 2
+  LPTa_val <- exp(-AIC_val / sum(n) / 2)
+  
+  # Generar funciones anidadas para generar las curvas sigmoides teóricas
+  cc13_funcs <- list()
+  cc22_funcs <- list()
+  
+  for (i in seq_len(n_horizons)) {
+    # Asegurar evaluación local de los parámetros con force() o evaluando variables
+    b13 <- x_matrix[1, i]; s13 <- x_matrix[2, i]; bon13 <- x_matrix[3, i]
+    b22 <- x_matrix[4, i]; s22 <- x_matrix[5, i]
+    
+    cc13_funcs[[i]] <- function(x, bonus=bon13, bias=b13, sigma=s13) {
+      1 / (1 + exp(-1 / (sigma * sqrt(2)) * (x + bonus + bias)))
+    }
+    cc22_funcs[[i]] <- function(x, bias=b22, sigma=s22) {
+      1 / (1 + exp(-1 / (sigma * sqrt(2)) * (x + bias)))
+    }
+  }
+  
+  # Estructurar resultados de salida similares a un struct
+  list(
+    model_name = 'original',
+    var_names = c('bias13', 'noise13', 'bonus', 'bias22', 'noise22'),
+    x = x_matrix,
+    bic = BIC_val,
+    lpt = LPT_val,
+    LL = sum(LL),
+    k = sum(k),
+    n = sum(n),
+    aic = AIC_val,
+    lpta = LPTa_val,
+    cc13 = cc13_funcs,
+    cc22 = cc22_funcs
+  )
+}
+
+# ========================================================================
+# logistic model # logistic model # logistic model # logistic model #
+# ========================================================================
+
+# MLE fits
+priorFlag <- 1
+fit_logistic <- list() # Store results in a list instead of a struct array
+
+for (sn in seq_along(clean_data)) {
+  # fit_biasNoiseBonus_v2 must return a list containing the parameters 
+  # and the functional forms for the curves (cc13 and cc22)
+  fit_logistic[[sn]] <- fit_biasNoiseBonus_v2(clean_data[1,], priorFlag)
+}
+
+# compute model choice curves
+x_vals <- seq(-30, 30, by = 0.01)
+
+# Pre-allocate 3D arrays (length of x_vals rows, 2 columns, N subjects "pages")
+n_subjects <- length(clean_data)
+cc13 <- array(NA, dim = c(length(x_vals), 2, n_subjects))
+cc22 <- array(NA, dim = c(length(x_vals), 2, n_subjects))
+
+for (sn in 1:n_subjects) {
+  for (i in 1:2) {
+    # Assuming cc13[[i]] and cc22[[i]] are functions returned by the fit
+    cc13[, i, sn] <- fit_logistic[[sn]]$cc13[[i]](x_vals)
+    cc22[, i, sn] <- fit_logistic[[sn]]$cc22[[i]](x_vals)
+  }
+}
+
+# Calculate the mean across the 3rd dimension (subjects), equivalent to nanmean(..., 3)
+CC13 <- apply(cc13, MARGIN = c(1, 2), FUN = mean, na.rm = TRUE)
+CC22 <- apply(cc22, MARGIN = c(1, 2), FUN = mean, na.rm = TRUE)
+
+```
+
+```{r}
+
+# 1. Obtener la lista única de sujetos
+sujetos_unicos <- unique(clean_data$subjectID)
+n_subjects <- length(sujetos_unicos)
+
+# 2. Bucle para ajustar el modelo por cada sujeto
+priorFlag <- 1
+fit_logistic <- list()
+
+for (sn in 1:n_subjects) {
+  # Filtramos la tabla gigante para quedarnos SOLO con las filas de ESTE sujeto
+  datos_un_sujeto <- clean_data %>% 
+    filter(subjectID == sujetos_unicos[sn])
+  
+  # Ahora le pasamos esos datos (que contienen ambos horizontes) a la función.
+  # Adentro de la función, unique(sub$gameLength) detectará correctamente los 2 tamaños de juego.
+  fit_logistic[[sn]] <- fit_biasNoiseBonus_v2(datos_un_sujeto, priorFlag)
+}
+
+# 3. Calcular las curvas de modelo (choice curves)
+x_vals <- seq(-30, 30, by = 0.01)
+
+# Pre-asignar los arrays (Filas: x_vals, Columnas: 2 horizontes, "Páginas": N sujetos)
+cc13 <- array(NA, dim = c(length(x_vals), 2, n_subjects))
+cc22 <- array(NA, dim = c(length(x_vals), 2, n_subjects))
+
+for (sn in 1:n_subjects) {
+  
+  # Como ahora cada sujeto sí procesó ambos horizontes, la lista de funciones cc13/cc22 tiene 2 elementos
+  for (i in 1:2) {
+    # i=1 es el primer horizonte (usualmente length 5 / horizon 1)
+    # i=2 es el segundo horizonte (usualmente length 10 / horizon 6)
+    cc13[, i, sn] <- fit_logistic[[sn]]$cc13[[i]](x_vals)
+    cc22[, i, sn] <- fit_logistic[[sn]]$cc22[[i]](x_vals)
+  }
+}
+
+# 4. Calcular el promedio de las curvas a través de todos los sujetos (dimensión 3)
+CC13 <- apply(cc13, MARGIN = c(1, 2), FUN = mean, na.rm = TRUE)
+CC22 <- apply(cc22, MARGIN = c(1, 2), FUN = mean, na.rm = TRUE)
+
+
+```
+
+
+
+# Figure 3
+
+```{r}
+df_CC13  = as.data.frame(CC13)
+
+# Define base colors
+AZblue <- "#377EB8"
+AZred <- "#E41A1C"
+
+# 1. Extract Parameters 
+# Assuming fit_logistic is the list generated in the previous step
+n_subjects <- length(fit_logistic)
+bonus_mat <- sapply(fit_logistic, function(f) f$x[3, ])   # Row 3
+noise13_mat <- sapply(fit_logistic, function(f) f$x[2, ]) # Row 2
+noise22_mat <- sapply(fit_logistic, function(f) f$x[5, ]) # Row 5
+
+# 2. Top Panels: Choice Curves
+plot_choice_curve <- function(theoretical_data, title_text, x_label, y_label) {
+  # theoretical_data is assumed to be a data frame with columns: x, H1, H6
+  ggplot(theoretical_data, aes(x = x)) +
+    # Theoretical lines
+    geom_line(aes(y = H1, color = "horizon 1"), linewidth = 1) +
+    geom_line(aes(y = H6, color = "horizon 6"), linewidth = 1) +
+    # Note: To add the empirical binned dots here, you would use geom_point() 
+    # fed by clean_data %>% group_by(horizon, reward_diff_bin) %>% summarise(p = mean(choice==2))
+    scale_color_manual(values = c("horizon 1" = AZblue, "horizon 6" = AZred)) +
+    coord_cartesian(xlim = c(-35, 35), ylim = c(0, 1)) +
+    labs(title = title_text, x = x_label, y = y_label, color = NULL) +
+    theme_classic(base_size = 14) +
+    theme(plot.title = element_text(face = "plain"), legend.position = "none")
+}
+
+# Assuming df_CC13 and df_CC22 are data frames built from your CC13/CC22 matrix averages
+p1 <- plot_choice_curve(df_CC13, "unequal [1 3]", "difference in mean reward\nR(high info) - R(low info)", "p(high info)") +
+  theme(legend.position = c(0.8, 0.2)) # 'southeast'
+p2 <- plot_choice_curve(df_CC22, "equal [2 2]", "difference in mean reward\nR(left) - R(right)", "p(left)")
+
+# 3. Bottom Panels: Parameter Distributions & T-Tests
+plot_param_slope <- function(param_matrix, title_text, y_label, y_limits, bracket_y, text_y) {
+  
+  # Convert 2xN matrix to long format and calculate explicit jitter to align lines and dots
+  df <- as.data.frame(t(param_matrix)) %>%
+    rename(H1 = V1, H6 = V2) %>%
+    mutate(
+      sujeto = row_number(),
+      jitter_H1 = 1 + runif(n(), -0.125, 0.125),
+      jitter_H6 = 2 + runif(n(), -0.125, 0.125)
+    )
+  
+  # Run Paired T-test
+  stats <- t.test(df$H6, df$H1, paired = TRUE)
+  p_val <- stats$p.value
+  asterisks <- if (p_val < 0.001) "***" else if (p_val < 0.005) "**" else if (p_val < 0.01) "*" else ""
+  
+  # Print stats to console
+  cat(sprintf('%s: t(%.0f) = %.2f, p = %.2e\n', title_text, stats$parameter, stats$statistic, p_val))
+  
+  # Build plot
+  p <- ggplot(df) +
+    # Connect subjects with gray lines using explicit jitter coordinates
+    geom_segment(aes(x = jitter_H1, xend = jitter_H6, y = H1, yend = H6), color = "gray75", linewidth = 0.5) +
+    # Plot points
+    geom_point(aes(x = jitter_H1, y = H1), color = AZblue, size = 2) +
+    geom_point(aes(x = jitter_H6, y = H6), color = AZred, size = 2) +
+    coord_cartesian(ylim = y_limits) +
+    scale_x_continuous(breaks = c(1, 2), labels = c("1", "6"), limits = c(0.5, 2.5)) +
+    labs(title = title_text, x = "horizon", y = y_label) +
+    theme_classic(base_size = 14) +
+    theme(plot.title = element_text(face = "plain"))
+  
+  # Add significance brackets if p < 0.01
+  if (asterisks != "") {
+    p <- p + 
+      annotate("segment", x = 1, xend = 1, y = bracket_y[1], yend = bracket_y[2]) +
+      annotate("segment", x = 1, xend = 2, y = bracket_y[2], yend = bracket_y[2]) +
+      annotate("segment", x = 2, xend = 2, y = bracket_y[2], yend = bracket_y[3]) +
+      annotate("text", x = 1.5, y = text_y, label = asterisks, size = 8)
+  }
+  
+  return(p)
+}
+
+p3 <- plot_param_slope(bonus_mat, "directed [1 3]", "information bonus", c(-40, 60), c(15, 50, 45), 52)
+p4 <- plot_param_slope(noise13_mat, "random [1 3]", "decision noise", c(0, 50), c(33, 45, 35), 46)
+p5 <- plot_param_slope(noise22_mat, "random [2 2]", "decision noise", c(0, 50), c(32, 45, 40), 46)
+
+# 4. Assemble the layout using patchwork
+figure_3 <- (p1 | p2) / (p3 | p4 | p5) + 
+  plot_layout(heights = c(1.5, 1)) +
+  plot_annotation(tag_levels = 'A') # Automatically adds A, B, C, D, E labels
+
+# Display the figure
+print(figure_3)
+```
+
+```{r}
+
+library(dplyr)
+library(ggplot2)
+
+# 1. Definir los límites y centros de los intervalos (bins)
+bin_edges <- seq(-25, 25, by = 10)
+bin_mids <- seq(-20, 20, by = 10)
+
+# 2. Calcular los datos empíricos agrupados (Equivalente al bucle y binIt)
+empirical_summary <- clean_data %>%
+  filter(rt5 > 0.1 & rt5 < 3) %>%
+  mutate(
+    dR = o2_4 - o1_4,
+    dI = (n2_4 - n1_4) / 2,
+    horizon = ifelse(gameLength == 5, "H1", "H6"),
+    cond = ifelse(n1_4 == n2_4, "22", "13"),
+    
+    # Identificar opción de alta información (1 o 2)
+    uID = case_when(dI > 0 ~ 1, dI < 0 ~ 2, TRUE ~ NA_real_),
+    
+    # Ejes X e Y adaptados por condición
+    x_val = ifelse(cond == "13", -dI * dR, dR),
+    y_val = ifelse(cond == "13", as.numeric(a_5 == uID), as.numeric(a_5 == 2)),
+    
+    # Asignar cada ensayo a su bin correspondiente
+    x_bin = as.numeric(as.character(cut(x_val, breaks = bin_edges, labels = bin_mids)))
+  ) %>%
+  filter(!is.na(x_bin)) %>%
+  # Promedio por sujeto por bin
+  group_by(cond, horizon, x_bin, subjectID) %>%
+  summarise(subj_mean = mean(y_val, na.rm = TRUE), .groups = 'drop') %>%
+  # Promedio y Error Estándar a nivel grupal
+  group_by(cond, horizon, x_bin) %>%
+  summarise(
+    p_mean = mean(subj_mean, na.rm = TRUE),
+    p_se = sd(subj_mean, na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+# Extraer los data frames empíricos por condición
+emp_13 <- empirical_summary %>% filter(cond == "13")
+emp_22 <- empirical_summary %>% filter(cond == "22")
+
+# 3. Función de ploteo actualizada para incluir las curvas teóricas Y los puntos empíricos
+plot_choice_curve_combined <- function(df_teorico, df_empirico, title_text, x_label, y_label) {
+  
+  ggplot() +
+    # Puntos empíricos y barras de error
+    geom_errorbar(data = df_empirico, 
+                  aes(x = x_bin, ymin = p_mean - p_se, ymax = p_mean + p_se, color = horizon), 
+                  width = 0, size = 1) +
+    geom_point(data = df_empirico, 
+               aes(x = x_bin, y = p_mean, color = horizon), 
+               size = 4) +
+    
+    # Curvas teóricas del modelo logístico
+    geom_line(data = df_teorico, aes(x = x, y = H1, color = "H1"), linewidth = 1) +
+    geom_line(data = df_teorico, aes(x = x, y = H6, color = "H6"), linewidth = 1) +
+    
+    scale_color_manual(values = c("H1" = AZblue, "H6" = AZred),
+                       labels = c("H1" = "horizon 1", "H6" = "horizon 6")) +
+    coord_cartesian(xlim = c(-35, 35), ylim = c(0, 1)) +
+    labs(title = title_text, x = x_label, y = y_label, color = NULL) +
+    theme_classic(base_size = 14) +
+    theme(plot.title = element_text(face = "plain"), legend.position = "none")
+}
+
+# 4. Generar los paneles superiores combinados
+p1 <- plot_choice_curve_combined(df_CC13, emp_13, "unequal [1 3]", 
+                                 "difference in mean reward\nR(high info) - R(low info)", "p(high info)") +
+      theme(legend.position = c(0.8, 0.2)) # Activar leyenda solo en el primer panel
+
+p2 <- plot_choice_curve_combined(df_CC22, emp_22, "equal [2 2]", 
+                                 "difference in mean reward\nR(left) - R(right)", "p(left)")
+
+```
+

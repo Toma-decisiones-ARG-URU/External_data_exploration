@@ -275,6 +275,225 @@ evaluate_trial_counts_split_cor <- function(data, metric_col, trial_counts, perm
 ```
 
 
+
+
+
+```{r}
+
+# 1. Function to calculate ICC for a given downsampled dataset
+calc_icc <- function(data, metric_col) {
+  # Prepare data: subjects as rows, trial numbers as columns
+  # Note: requires a 'trial_number' column to track items
+  wide_data <- data %>%
+    select(id, {{metric_col}}) %>%
+    mutate(trial_number = 1:n(), .by = "id") %>% 
+    pivot_wider(
+      names_from = trial_number, 
+      values_from = {{metric_col}},
+      values_fn = mean # In case of duplicate trial numbers in a subset
+    ) %>%
+    column_to_rownames("id")
+  
+  # Calculate ICC using the psych package
+  # The 'ICC3k' model matches the mean-rating consistency model used in the paper
+  icc_res <<- psych::ICC(wide_data, missing = FALSE)
+  
+  # Extract just the ICC3k value
+  # return(icc_res$results["ICC3k", "ICC"])
+  return(icc_res$results["Average_fixed_raters", "ICC"])
+}
+
+calc_icc(df[df$horizon_f == "short",], "chose_high_info_value")
+
+# 2. Function to downsample data and run permutations
+evaluate_trial_counts_ICC <- function(data, metric_col, trial_counts, permutations = 50) {
+  
+  # Create a grid of parameters to iterate over
+  grid <- expand_grid(
+    n_trials = trial_counts,
+    perm = 1:permutations
+  )
+  
+  # Map over the grid
+  results <- grid %>%
+    mutate(
+      reliability = map_dbl(n_trials, function(n) {
+        
+        # Downsample data to 'n' trials per subject
+        downsampled_data <- data %>%
+          group_by(id) %>%
+          slice_sample(n = n, replace = FALSE) %>%
+          ungroup()
+        
+        # Calculate reliability for this subset
+        calc_icc(downsampled_data, metric_col)
+      })
+    )
+  
+  # Summarize the results across permutations
+  summary_results <- results %>%
+    group_by(n_trials) %>%
+    summarize(
+      mean_reliability = mean(reliability, na.rm = TRUE),
+      sd_reliability = sd(reliability, na.rm = TRUE),
+      ci_lower = quantile(reliability, 0.025, na.rm = TRUE),
+      ci_upper = quantile(reliability, 0.975, na.rm = TRUE)
+    )
+  
+  return(summary_results)
+}
+
+
+```
+
+```{r}
+
+
+df %>% 
+  group_by(id, horizon_f) %>% 
+  summarise(n())
+
+
+```
+
+
+```{r}
+
+
+# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+trial_levels <- seq(10, 80, by = 10)
+
+# Run the simulation (using 100 permutations for stability)
+set.seed(42) # For reproducibility
+reliability_curve <- evaluate_trial_counts(
+    data = df, 
+  metric_col = "chose_high_info_value", 
+  trial_counts = trial_levels, 
+  permutations = 100
+)
+
+reliability_curve = reliability_curve %>% 
+  mutate(method = "Spearman-Brown")
+
+# Plot the results
+ggplot(reliability_curve, aes(x = n_trials, y = mean_reliability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Spearman-Brown Corrected Reliability"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+```{r message=FALSE}
+
+
+# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+trial_levels <- seq(10, 80, by = 10)
+
+# Run the simulation (using 100 permutations for stability)
+set.seed(42) # For reproducibility
+reliability_curve_ICC <- evaluate_trial_counts_ICC(
+    data = df, 
+  metric_col = "chose_high_info_value", 
+  trial_counts = trial_levels, 
+  permutations = 100
+)
+
+reliability_curve_ICC = reliability_curve_ICC %>% 
+  mutate(method = "ICC")
+
+# Plot the results
+ggplot(reliability_curve_ICC, aes(x = n_trials, y = mean_reliability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "ICC Reliability"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+```{r}
+
+reliability_all <- rbind(reliability_curve, reliability_curve_ICC)
+
+reliability_all %>%
+  
+  ggplot(aes(x = n_trials, y = mean_reliability, color = method)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper, fill = method), alpha = 0.1) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Reliability"
+  ) +
+  theme_minimal()
+
+
+
+
+```
+```{r}
+
+# Prepare full dataset with factor-coded horizon
+df_full <- df %>%
+  filter(horizon %in% c(1, 10)) %>% # Adjust levels if using 1 vs 5/6
+  mutate(horizon_factor = factor(horizon, levels = c(1, 10), labels = c("H1", "H10")))
+
+# Model formula with interaction
+full_model_formula <- chose_high_info_value ~ horizon_factor * reward_differential
+
+# Run simulation for the Horizon Effect
+set.seed(42)
+horizon_effect_reliability <- evaluate_param_reliability(
+  data = df_full,
+  formula = full_model_formula,
+  target_coef = "horizon_factorH10",
+  trial_counts = seq(20, 60, by = 10),
+  permutations = 100
+)
+
+```
+
+```{r}
+
+
+horizon_effect_reliability %>%
+  
+  ggplot(aes(x = n_trials, y = mean_reliability, color = method)) +
+  geom_line(size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper, fill = method), alpha = 0.1) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Reliability"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+Otra forma de calcular ICC:
+
 # ```{r}
 # library(tidyverse)
 # library(lme4)
@@ -331,146 +550,3 @@ evaluate_trial_counts_split_cor <- function(data, metric_col, trial_counts, perm
 #   return(summary_results)
 # }
 <!-- ``` -->
-
-
-```{r}
-
-# 1. Function to calculate ICC for a given downsampled dataset
-calc_icc <- function(data, metric_col) {
-  # Prepare data: subjects as rows, trial numbers as columns
-  # Note: requires a 'trial_number' column to track items
-  wide_data <- data %>%
-    select(id, {{metric_col}}) %>%
-    mutate(trial_number = 1:n(), .by = "id") %>% 
-    pivot_wider(
-      names_from = trial_number, 
-      values_from = {{metric_col}},
-      values_fn = mean # In case of duplicate trial numbers in a subset
-    ) %>%
-    column_to_rownames("id")
-  
-  # Calculate ICC using the psych package
-  # The 'ICC3k' model matches the mean-rating consistency model used in the paper
-  icc_res <<- psych::ICC(wide_data, missing = FALSE)
-  
-  # Extract just the ICC3k value
-  # return(icc_res$results["ICC3k", "ICC"])
-  return(icc_res$results["Average_fixed_raters", "ICC"])
-}
-
-calc_icc(df, "chose_high_info_value")
-
-# 2. Function to downsample data and run permutations
-evaluate_trial_counts_ICC <- function(data, metric_col, trial_counts, permutations = 50) {
-  
-  # Create a grid of parameters to iterate over
-  grid <- expand_grid(
-    n_trials = trial_counts,
-    perm = 1:permutations
-  )
-  
-  # Map over the grid
-  results <- grid %>%
-    mutate(
-      reliability = map_dbl(n_trials, function(n) {
-        
-        # Downsample data to 'n' trials per subject
-        downsampled_data <- data %>%
-          group_by(id) %>%
-          slice_sample(n = n, replace = FALSE) %>%
-          ungroup()
-        
-        # Calculate reliability for this subset
-        calc_icc(downsampled_data, metric_col)
-      })
-    )
-  
-  # Summarize the results across permutations
-  summary_results <- results %>%
-    group_by(n_trials) %>%
-    summarize(
-      mean_reliability = mean(reliability, na.rm = TRUE),
-      sd_reliability = sd(reliability, na.rm = TRUE),
-      ci_lower = quantile(reliability, 0.025, na.rm = TRUE),
-      ci_upper = quantile(reliability, 0.975, na.rm = TRUE)
-    )
-  
-  return(summary_results)
-}
-
-
-```
-
-
-```{r}
-
-  grid <- expand_grid(
-    n_trials = trial_levels,
-    perm = 1:10
-  )
-```
-
-
-
-```{r}
-
-
-# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
-trial_levels <- seq(5, 40, by = 5)
-
-# Run the simulation (using 100 permutations for stability)
-set.seed(42) # For reproducibility
-reliability_curve <- evaluate_trial_counts(
-    data = df[df$horizon_f == "long",], 
-  metric_col = "chose_high_info_value", 
-  trial_counts = trial_levels, 
-  permutations = 100
-)
-
-# Plot the results
-ggplot(reliability_curve, aes(x = n_trials, y = mean_reliability)) +
-  geom_line(color = "blue", size = 1) +
-  geom_point(size = 3) +
-  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
-  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
-  labs(
-    title = "Reliability of Horizon Task by Trial Count",
-    x = "Number of Trials (Games) per Subject",
-    y = "Spearman-Brown Corrected Reliability"
-  ) +
-  theme_minimal()
-
-
-```
-
-
-```{r message=FALSE}
-
-
-# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
-trial_levels <- seq(10, 80, by = 10)
-
-# Run the simulation (using 100 permutations for stability)
-set.seed(42) # For reproducibility
-reliability_curve <- evaluate_trial_counts_ICC(
-    data = df, 
-  metric_col = "chose_high_info_value", 
-  trial_counts = trial_levels, 
-  permutations = 100
-)
-
-# Plot the results
-ggplot(reliability_curve, aes(x = n_trials, y = mean_reliability)) +
-  geom_line(color = "blue", size = 1) +
-  geom_point(size = 3) +
-  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
-  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
-  labs(
-    title = "Reliability of Horizon Task by Trial Count",
-    x = "Number of Trials (Games) per Subject",
-    y = "Spearman-Brown Corrected Reliability"
-  ) +
-  theme_minimal()
-
-
-```

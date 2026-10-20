@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r packages}
 
 library(tidyverse)
+library(agreement)
 
 ```
 
@@ -26,25 +27,19 @@ We aim to replicate some of the figures and analysis from the paper in order to 
 # Data loading
 
 
-```{r}
-
-read.csv("repo_files/Data/tr_long.csv")
-
-```
-
 
 ```{r}
 
 # note: unstandardized questionnaire data ('us' stands for 'unstandardized')
-questionnaire_us_study1 <- read.csv("xu_et_al_2023/repo_files/Data/questionnaire_us_study1.csv")
-questionnaire_us_study2 <- read.csv("xu_et_al_2023/repo_files/Data/questionnaire_us_study2.csv")
+questionnaire_us_study1 <- read.csv("repo_files/Data/questionnaire_us_study1.csv")
+questionnaire_us_study2 <- read.csv("repo_files/Data/questionnaire_us_study2.csv")
 
 # note: hr stands for 'horizon', referring to the Horizon task
-hr_long_study1 <- read.csv("xu_et_al_2023/repo_files/Data/hr_long_study1.csv") # behavioral data in long format
-hr_wide_study1 <- read.csv("xu_et_al_2023/repo_files/Data/hr_wide_study1.csv") # behavioral data in wide format
+hr_long_study1 <- read.csv("repo_files/Data/hr_long_study1.csv") # behavioral data in long format
+hr_wide_study1 <- read.csv("repo_files/Data/hr_wide_study1.csv") # behavioral data in wide format
 
-hr_long_study2 <- read.csv("xu_et_al_2023/repo_files/Data/hr_long_study2.csv") # behavioral data in long format
-hr_wide_study2 <- read.csv("xu_et_al_2023/repo_files/Data/hr_wide_study2.csv") # behavioral data in wide format
+hr_long_study2 <- read.csv("repo_files/Data/hr_long_study2.csv") # behavioral data in long format
+hr_wide_study2 <- read.csv("repo_files/Data/hr_wide_study2.csv") # behavioral data in wide format
 
 ```
 
@@ -151,38 +146,12 @@ df <- hr_long_study1 %>%
   mutate(horizon_f = factor(game_length, levels = c(5, 10),
                             labels = c("short", "long")))
 
-# Sanity check: ~80 games per participant
-df %>% count(id) %>% summary()
 
-# % choosing the high-information option, by horizon
-de_horizon <- df %>%
-  group_by(id, horizon_f) %>%
-  summarise(pct_explore = mean(chose_high_info_value, na.rm = TRUE) * 100,
-            .groups = "drop") %>%
-  pivot_wider(names_from = horizon_f, values_from = pct_explore,
-              names_prefix = "pct_") %>%
-  mutate(directed_exploration = pct_long - pct_short)  # horizon-driven increase
-
-# Same, split by reward-information conflict
-de_conflict <- df %>%
-  group_by(id, horizon_f, conflict) %>%
-  summarise(pct_explore = mean(chose_high_info_value, na.rm = TRUE) * 100,
-            .groups = "drop")
-
-# Merge with participant-level variables
-subj <- df %>%
-  distinct(id, unpredictability, family_income, digit_span, child_anxiety, life_events)
-
-de_subj <- left_join(de_horizon, subj, by = "id")
-
-de_subj %>% 
-       select(id, pct_short, pct_long, directed_exploration)%>% 
-       filter(id == "1068C")
+df %>% 
+  group_by(id, game_length) %>% 
+  summarise(n())
 
 
-hr_wide_study1 %>% 
-       select(id, directed_exploration,strategic_exploration, short_horizon, long_horizon)%>% 
-       filter(id == "1068C")
 
 
 de_overall <- df %>%
@@ -191,10 +160,16 @@ de_overall <- df %>%
             directed_exploration = mean(chose_high_info_value, na.rm = TRUE),
             .groups = "drop")
 
+
+df %>%
+  group_by(id, horizon_f) %>%
+  summarise(n_games = n(),
+            directed_exploration = mean(chose_high_info_value, na.rm = TRUE),
+            .groups = "drop")
+
 de_overall %>% filter(id == "1068C")
 
 
-hr_long_study1%>% filter(id == "1068C")
 
 
 
@@ -206,11 +181,296 @@ strategic_subj <- df %>%
   mutate(strategic_exploration = long - short) %>%
   left_join(df %>% distinct(id, unpredictability, family_income, digit_span), by = "id")
 
-summary(lm(strategic_exploration ~ scale(unpredictability) +
-             scale(family_income) + scale(digit_span), data = strategic_subj))
-
-
-strategic_subj
 ```
 
+
+
+
 YA TENGO EXPLORACIÓN DIRECTA Y ESTRATEGICA. AHORA CALCULAR RELIABILITY
+
+
+
+
+
+```{r}
+
+
+# 1. Function to calculate split-half reliability for a given dataset
+calc_split_half <- function(data, metric_col) {
+  # Assign random halves to each subject's trials (assuming 'game' is your trial unit)
+  data_split <- data %>%
+    group_by(id) %>%
+    mutate(
+      rand_order = sample(row_number()),
+      half = if_else(rand_order %% 2 == 0, "half_1", "half_2")
+    ) %>%
+    ungroup()
+  
+  # Calculate the score for each subject per half
+  # Replace 'mean(score)' with your specific Horizon metric calculation
+  scores <- data_split %>%
+    group_by(id, half) %>%
+    summarize(
+      score = mean(.data[[metric_col]], na.rm = TRUE), 
+      .groups = "drop"
+    ) %>%
+    pivot_wider(names_from = half, values_from = score)
+  
+  # Calculate Pearson correlation and apply Spearman-Brown correction
+  r <- cor(scores$half_1, scores$half_2, use = "pairwise.complete.obs")
+  r_sb <- (2 * r) / (1 + r)
+  
+  return(r_sb)
+}
+
+
+calc_split_half(    data = df[df$game_length == 10,] , "chose_high_info_value")
+
+
+
+```
+
+
+```{r}
+
+# 2. Function to downsample data and run permutations
+evaluate_trial_counts_split_cor <- function(data, metric_col, trial_counts, permutations = 50) {
+  
+  # Create a grid of parameters to iterate over
+  grid <- expand_grid(
+    n_trials = trial_counts,
+    perm = 1:permutations
+  )
+  
+  # Map over the grid
+  results <- grid %>%
+    mutate(
+      reliability = map_dbl(n_trials, function(n) {
+        
+        # Downsample data to 'n' trials per subject
+        downsampled_data <- data %>%
+          group_by(id) %>%
+          slice_sample(n = n, replace = FALSE) %>%
+          ungroup()
+        
+        # Calculate reliability for this subset
+        calc_split_half(downsampled_data, metric_col)
+      })
+    )
+  
+  # Summarize the results across permutations
+  summary_results <- results %>%
+    group_by(n_trials) %>%
+    summarize(
+      mean_reliability = mean(reliability, na.rm = TRUE),
+      sd_reliability = sd(reliability, na.rm = TRUE),
+      ci_lower = quantile(reliability, 0.025, na.rm = TRUE),
+      ci_upper = quantile(reliability, 0.975, na.rm = TRUE)
+    )
+  
+  return(summary_results)
+}
+
+
+```
+
+
+# ```{r}
+# library(tidyverse)
+# library(lme4)
+# library(performance)
+# 
+# # 1. Function to calculate ICC using a mixed-effects model
+# calc_icc_mixed <- function(data, metric_col) {
+#   # Construct the formula dynamically (e.g., "exploration_behavior ~ 1 + (1 | subject)")
+#   model_formula <- as.formula(paste0(metric_col, " ~ 1 + (1 | subject)"))
+#   
+#   # Fit a random-intercept linear mixed model
+#   # If your metric is strictly binary, lmer will approximate; 
+#   # glmer(..., family = binomial) is the logistic alternative.
+#   model <- lme4::lmer(model_formula, data = data)
+#   
+#   # Calculate ICC using the performance package
+#   icc_res <- performance::icc(model)
+#   
+#   # Extract the unadjusted ICC (variance explained by the grouping structure)
+#   return(icc_res$ICC_unadjusted)
+# }
+# 
+# # 2. Function to downsample data and run permutations
+# evaluate_icc_trial_counts <- function(data, metric_col, trial_counts, permutations = 50) {
+#   
+#   grid <- expand_grid(
+#     n_trials = trial_counts,
+#     perm = 1:permutations
+#   )
+#   
+#   results <- grid %>%
+#     mutate(
+#       reliability = map_dbl(n_trials, function(n) {
+#         
+#         downsampled_data <- data %>%
+#           group_by(subject) %>%
+#           slice_sample(n = n, replace = FALSE) %>%
+#           ungroup()
+#         
+#         # Call the new mixed-model ICC function
+#         calc_icc_mixed(downsampled_data, metric_col)
+#       })
+#     )
+#   
+#   summary_results <- results %>%
+#     group_by(n_trials) %>%
+#     summarize(
+#       mean_icc = mean(reliability, na.rm = TRUE),
+#       sd_icc = sd(reliability, na.rm = TRUE),
+#       ci_lower = quantile(reliability, 0.025, na.rm = TRUE),
+#       ci_upper = quantile(reliability, 0.975, na.rm = TRUE)
+#     )
+#   
+#   return(summary_results)
+# }
+<!-- ``` -->
+
+
+```{r}
+
+# 1. Function to calculate ICC for a given downsampled dataset
+calc_icc <- function(data, metric_col) {
+  # Prepare data: subjects as rows, trial numbers as columns
+  # Note: requires a 'trial_number' column to track items
+  wide_data <- data %>%
+    select(id, {{metric_col}}) %>%
+    mutate(trial_number = 1:n(), .by = "id") %>% 
+    pivot_wider(
+      names_from = trial_number, 
+      values_from = {{metric_col}},
+      values_fn = mean # In case of duplicate trial numbers in a subset
+    ) %>%
+    column_to_rownames("id")
+  
+  # Calculate ICC using the psych package
+  # The 'ICC3k' model matches the mean-rating consistency model used in the paper
+  icc_res <<- psych::ICC(wide_data, missing = FALSE)
+  
+  # Extract just the ICC3k value
+  # return(icc_res$results["ICC3k", "ICC"])
+  return(icc_res$results["Average_fixed_raters", "ICC"])
+}
+
+calc_icc(df, "chose_high_info_value")
+
+# 2. Function to downsample data and run permutations
+evaluate_trial_counts_ICC <- function(data, metric_col, trial_counts, permutations = 50) {
+  
+  # Create a grid of parameters to iterate over
+  grid <- expand_grid(
+    n_trials = trial_counts,
+    perm = 1:permutations
+  )
+  
+  # Map over the grid
+  results <- grid %>%
+    mutate(
+      reliability = map_dbl(n_trials, function(n) {
+        
+        # Downsample data to 'n' trials per subject
+        downsampled_data <- data %>%
+          group_by(id) %>%
+          slice_sample(n = n, replace = FALSE) %>%
+          ungroup()
+        
+        # Calculate reliability for this subset
+        calc_icc(downsampled_data, metric_col)
+      })
+    )
+  
+  # Summarize the results across permutations
+  summary_results <- results %>%
+    group_by(n_trials) %>%
+    summarize(
+      mean_reliability = mean(reliability, na.rm = TRUE),
+      sd_reliability = sd(reliability, na.rm = TRUE),
+      ci_lower = quantile(reliability, 0.025, na.rm = TRUE),
+      ci_upper = quantile(reliability, 0.975, na.rm = TRUE)
+    )
+  
+  return(summary_results)
+}
+
+
+```
+
+
+```{r}
+
+  grid <- expand_grid(
+    n_trials = trial_levels,
+    perm = 1:10
+  )
+```
+
+
+
+```{r}
+
+
+# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+trial_levels <- seq(5, 40, by = 5)
+
+# Run the simulation (using 100 permutations for stability)
+set.seed(42) # For reproducibility
+reliability_curve <- evaluate_trial_counts(
+    data = df[df$horizon_f == "long",], 
+  metric_col = "chose_high_info_value", 
+  trial_counts = trial_levels, 
+  permutations = 100
+)
+
+# Plot the results
+ggplot(reliability_curve, aes(x = n_trials, y = mean_reliability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Spearman-Brown Corrected Reliability"
+  ) +
+  theme_minimal()
+
+
+```
+
+
+```{r message=FALSE}
+
+
+# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+trial_levels <- seq(10, 80, by = 10)
+
+# Run the simulation (using 100 permutations for stability)
+set.seed(42) # For reproducibility
+reliability_curve <- evaluate_trial_counts_ICC(
+    data = df, 
+  metric_col = "chose_high_info_value", 
+  trial_counts = trial_levels, 
+  permutations = 100
+)
+
+# Plot the results
+ggplot(reliability_curve, aes(x = n_trials, y = mean_reliability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Spearman-Brown Corrected Reliability"
+  ) +
+  theme_minimal()
+
+
+```

@@ -12,7 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r packages}
 
 library(tidyverse)
-library(agreement)
+library(psych)
+# library(agreement)
 
 ```
 
@@ -74,69 +75,7 @@ bind_rows(a, b, c, d, e) %>%
 
 
 
-```{r}
 
-
-library(dplyr)
-library(tidyr)
-library(purrr)
-library(broom) # Para extraer los coeficientes de los modelos ordenadamente
-
-# 1. Definir la función para extraer los parámetros
-get_exploration_params <- function(df) {
-  
-  # Ajustar el modelo logístico prediciendo la elección de alta información
-  # en función de la diferencia de recompensa
-  modelo <- glm(chose_high_info_value ~ reward_differential, 
-                family = binomial(link = "logit"), 
-                data = df)
-  
-  # Extraer los coeficientes
-  coefs <- coef(modelo)
-  beta_0 <- coefs["(Intercept)"]
-  beta_1 <- coefs["reward_differential"]
-  
-  # Mapear los coeficientes a los parámetros cognitivos
-  # (Se usa el valor absoluto para sigma porque el ruido siempre es positivo)
-  sigma <- abs(1 / beta_1)      # Ruido de decisión (Exploración Aleatoria)
-  A     <- beta_0 / beta_1      # Bono de Información (Exploración Dirigida)
-  
-  # Retornar como un data frame de una sola fila
-  tibble(
-    directed_exploration = A,
-    random_exploration = sigma
-  )
-}
-
-# 2. Aplicar la función a tu tabla por participante y por horizonte
-# Nota: Filtramos NAs porque en la condición de información igual [2 2], 
-# "chose_high_info_value" no debería estar definido.
-parametros_cognitivos <- hr_long_study1 %>%
-  filter(!is.na(chose_high_info_value), !is.na(reward_differential)) %>%
-    group_by(id) %>%
-  # group_by(id, horizon) %>%
-  group_modify(~ get_exploration_params(.x)) %>%
-  ungroup()
-
-# 3. (Opcional) Pivotar la tabla si necesitas tener los horizontes en columnas 
-# separadas para hacer las restas (ej. directed_exploration_H6 - H1)
-parametros_anchos <- parametros_cognitivos %>%
-  pivot_wider(
-    names_from = horizon,
-    values_from = c(directed_exploration, random_exploration)
-  )
-
-# Ver el resultado
-parametros_cognitivos %>% 
-       filter(id == "1068C")
-
-hr_wide_study1 %>% 
-       select(id, directed_exploration)%>% 
-       filter(id == "1068C")
-
-hist(hr_wide_study1$directed_exploration)
-
-```
 ```{r}
 
 library(tidyverse)
@@ -178,8 +117,7 @@ strategic_subj <- df %>%
   group_by(id, horizon_f) %>%
   summarise(p = mean(chose_high_info_value, na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(names_from = horizon_f, values_from = p) %>%
-  mutate(strategic_exploration = long - short) %>%
-  left_join(df %>% distinct(id, unpredictability, family_income, digit_span), by = "id")
+  mutate(strategic_exploration = long - short) 
 
 ```
 
@@ -303,7 +241,7 @@ calc_icc <- function(data, metric_col) {
   return(icc_res$results["Average_fixed_raters", "ICC"])
 }
 
-calc_icc(df[df$horizon_f == "short",], "chose_high_info_value")
+
 
 # 2. Function to downsample data and run permutations
 evaluate_trial_counts_ICC <- function(data, metric_col, trial_counts, permutations = 50) {
@@ -346,37 +284,113 @@ evaluate_trial_counts_ICC <- function(data, metric_col, trial_counts, permutatio
 
 ```
 
+
+
 ```{r}
 
+set.seed(42)
 
-df %>% 
-  group_by(id, horizon_f) %>% 
-  summarise(n())
+reliability_curve_spearman_long <- df %>% 
+  filter(horizon_f == "long") %>% 
+  
+  evaluate_trial_counts_split_cor(
+  metric_col = "chose_high_info_value", 
+  trial_counts = seq(10, 40, by = 10), 
+  permutations = 100
+)%>% 
+  mutate(method = "Spearman-Brown")
+
+
+# # Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+# trial_levels <- 
+# 
+# # Run the simulation (using 100 permutations for stability)
+# set.seed(42) # For reproducibility
+
+
+# reliability_curve = reliability_curve 
+
+# Plot the results
+ggplot(reliability_curve_spearman_long, aes(x = n_trials, y = mean_reliability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Spearman-Brown Corrected Reliability"
+  ) +
+  theme_minimal()
 
 
 ```
 
+```{r}
+
+set.seed(42)
+
+reliability_curve_spearman_short <- df %>% 
+  filter(horizon_f == "short") %>% 
+  
+  evaluate_trial_counts_split_cor(
+  metric_col = "chose_high_info_value", 
+  trial_counts = seq(10, 40, by = 10), 
+  permutations = 100
+)%>% 
+  mutate(method = "Spearman-Brown")
+
+
+# # Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+# trial_levels <- 
+# 
+# # Run the simulation (using 100 permutations for stability)
+# set.seed(42) # For reproducibility
+
+
+# reliability_curve = reliability_curve 
+
+# Plot the results
+ggplot(reliability_curve_spearman_short, aes(x = n_trials, y = mean_reliability)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_hline(yintercept = 0.7, linetype = "dashed", color = "red") + # 0.7 is a common acceptable threshold
+  labs(
+    title = "Reliability of Horizon Task by Trial Count",
+    x = "Number of Trials (Games) per Subject",
+    y = "Spearman-Brown Corrected Reliability"
+  ) +
+  theme_minimal()
+
+
+```
 
 ```{r}
 
+set.seed(42)
 
-# Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
-trial_levels <- seq(10, 80, by = 10)
-
-# Run the simulation (using 100 permutations for stability)
-set.seed(42) # For reproducibility
-reliability_curve <- evaluate_trial_counts(
-    data = df, 
+reliability_curve_spearman <- df %>% 
+  
+  evaluate_trial_counts_split_cor(
   metric_col = "chose_high_info_value", 
-  trial_counts = trial_levels, 
+  trial_counts = seq(10, 80, by = 10), 
   permutations = 100
-)
-
-reliability_curve = reliability_curve %>% 
+)%>% 
   mutate(method = "Spearman-Brown")
 
+
+# # Define the trial counts you want to test (e.g., from 20 up to 100 in steps of 10)
+# trial_levels <- 
+# 
+# # Run the simulation (using 100 permutations for stability)
+# set.seed(42) # For reproducibility
+
+
+# reliability_curve = reliability_curve 
+
 # Plot the results
-ggplot(reliability_curve, aes(x = n_trials, y = mean_reliability)) +
+ggplot(reliability_curve_spearman, aes(x = n_trials, y = mean_reliability)) +
   geom_line(color = "blue", size = 1) +
   geom_point(size = 3) +
   geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
@@ -429,7 +443,7 @@ ggplot(reliability_curve_ICC, aes(x = n_trials, y = mean_reliability)) +
 
 ```{r}
 
-reliability_all <- rbind(reliability_curve, reliability_curve_ICC)
+reliability_all <- rbind(reliability_curve_spearman, reliability_curve_ICC)
 
 reliability_all %>%
   
@@ -490,6 +504,23 @@ horizon_effect_reliability %>%
 
 
 ```
+
+
+
+```{r fig.height= 6}
+
+df %>% 
+  mutate(trial_number = 1:n(), .by = "id" ) %>% 
+  summarise(mean = mean(chose_high_info_value), .by = c("trial_number", "horizon_f")) %>% 
+  ggplot(aes(x = factor(trial_number), y = mean ))+
+  geom_bar(stat = "identity")+
+  facet_wrap(~horizon_f)+
+  coord_flip()
+
+```
+
+
+
 
 
 Otra forma de calcular ICC:
